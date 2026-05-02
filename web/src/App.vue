@@ -50,7 +50,12 @@ const years = computed(() => {
   const recentYears = dataSource.value === 'fanza'
     ? Array.from({ length: latestYear - 2026 + 1 }, (_, index) => latestYear - index)
     : Array.from({ length: 10 }, (_, index) => latestYear - index)
-  return [...new Set([...recentYears, ...fromData])].sort((a, b) => b - a)
+  const merged = [...new Set([...recentYears, ...fromData])]
+  // FANZA 数据源仅展示 2026 年起的年份，过滤历史数据混入
+  const filtered = dataSource.value === 'fanza'
+    ? merged.filter(year => year >= 2026)
+    : merged
+  return filtered.sort((a, b) => b - a)
 })
 
 const monthOptions = computed(() => {
@@ -58,9 +63,12 @@ const monthOptions = computed(() => {
   const generated = dataSource.value === 'fanza'
     ? monthsBetween('2026-01', latestCompleteMonth())
     : monthsForPeriod('decade')
-  return [...new Set([...generated, ...fromData])]
-    .filter(Boolean)
-    .sort((a, b) => b.localeCompare(a))
+  const merged = [...new Set([...generated, ...fromData])].filter(Boolean)
+  // FANZA 数据源仅展示 2026-01 起的月份，过滤历史数据混入
+  const filtered = dataSource.value === 'fanza'
+    ? merged.filter(month => month >= '2026-01')
+    : merged
+  return filtered.sort((a, b) => b.localeCompare(a))
 })
 
 const activeRange = computed(() => {
@@ -429,6 +437,19 @@ watch(dataSource, async () => {
         <option value="decade">{{ dataSource === 'fanza' ? '2026 起榜单' : '近十年榜单' }}</option>
         <option value="year">年度榜单</option>
         <option value="month">月度榜单</option>
+      </select>
+      <select
+        v-model="selectedYear"
+        class="select"
+        :disabled="period !== 'year' || !years.length"
+      >
+        <option
+          v-for="year in years"
+          :key="year"
+          :value="String(year)"
+        >
+          {{ year }} 年
+        </option>
       </select>
       <select
         v-model="selectedMonth"

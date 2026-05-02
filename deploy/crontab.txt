@@ -1,0 +1,3 @@
+# 每月 1 日凌晨 3 点抓取上个月完整 FANZA 月度排行榜并重生成 ranking.json
+# 使用：crontab -e 后将本文件内容追加到当前用户的 crontab
+0 3 1 * * /var/www/ranking-site/crawler/run.sh >> /var/log/ranking-crawler.log 2>&1

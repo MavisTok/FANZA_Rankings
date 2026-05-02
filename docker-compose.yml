@@ -1,0 +1,14 @@
+services:
+  app:
+    build: .
+    container_name: fanza-rankings
+    ports:
+      - "5174:80"
+    volumes:
+      - fanza-data:/var/www/ranking-site/data
+    environment:
+      - TZ=Asia/Shanghai
+    restart: unless-stopped
+
+volumes:
+  fanza-data:

@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="300" height="400" viewBox="0 0 300 400">
+  <rect width="300" height="400" fill="#fff6e6"/>
+  <rect x="24" y="24" width="252" height="352" rx="14" fill="#ffffff" stroke="#e8cf9b"/>
+  <text x="150" y="182" text-anchor="middle" font-family="Arial, sans-serif" font-size="30" font-weight="700" fill="#1d1d1f">Sample C</text>
+  <text x="150" y="224" text-anchor="middle" font-family="Arial, sans-serif" font-size="16" fill="#8a5a00">local cover</text>
+</svg>

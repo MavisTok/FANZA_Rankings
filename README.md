@@ -21,6 +21,10 @@ http://127.0.0.1:5174/
 - 成功在线抓取到非空月榜时会覆盖保存该月数据，保证每月 1 号补全上个月后以最新完整数据为准。
 - 完整月份会在月度 JSON 中写入 `complete_month: true`，聚合结果中也会输出 `months_complete`。
 
+## 数据资源致谢
+
+感谢 [jinjier.art/sql](https://jinjier.art/sql) 提供的数据资源支持，本项目引用了其公开数据资源用于榜单数据补全与校验。
+
 ## 月度自动抓取
 
 容器内 cron 会在每月 1 日凌晨 3 点（`Asia/Shanghai`）运行：

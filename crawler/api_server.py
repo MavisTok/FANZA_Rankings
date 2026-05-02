@@ -185,7 +185,7 @@ class APIHandler(BaseHTTPRequestHandler):
 
 def main():
     port = int(os.environ.get("API_PORT", "8080"))
-    server = HTTPServer(("0.0.0.0", port), APIHandler)
+    server = HTTPServer(("127.0.0.1", port), APIHandler)
     print(f"[api] listening on :{port}", flush=True)
     server.serve_forever()
 

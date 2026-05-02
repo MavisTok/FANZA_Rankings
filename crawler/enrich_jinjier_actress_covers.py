@@ -3,7 +3,7 @@
 
 脚本从 FANZA 当前月度女演员榜抓取姓名和 imageUrl，按姓名匹配
 data/jinjier/fanza_actresses.json 中的 Jinjier 记录。匹配成功后会下载图片到
-data/covers/actresses，并在 JSON 记录上写入 local_cover / fanza_image_url。
+data/covers/jinjier/actresses，并在 JSON 记录上写入 local_cover / fanza_image_url。
 """
 import argparse
 import datetime as dt
@@ -21,7 +21,7 @@ from urllib.request import Request, urlopen
 
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_INPUT = ROOT / "data" / "jinjier" / "fanza_actresses.json"
-COVER_DIR = ROOT / "data" / "covers" / "actresses"
+COVER_DIR = ROOT / "data" / "covers" / "jinjier" / "actresses"
 GRAPHQL_URL = "https://api.video.dmm.co.jp/graphql"
 REFERER_URL = "https://video.dmm.co.jp/av/ranking/?term=monthly&type=actress"
 TIMEOUT = 30
@@ -199,7 +199,7 @@ def sized_image_url(url: str, image_size: int) -> str:
 def download_cover(record: dict, skip_downloads: bool, force: bool, image_size: int) -> str:
     filename = cover_filename(record)
     local_path = COVER_DIR / filename
-    local_url = f"/data/covers/actresses/{filename}"
+    local_url = f"/data/covers/jinjier/actresses/{filename}"
     if skip_downloads or (local_path.exists() and not force):
         return local_url
 

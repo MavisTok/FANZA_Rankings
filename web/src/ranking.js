@@ -152,6 +152,15 @@ export function formatProductCode(code) {
   return `${label.toUpperCase()}-${number}${suffix.toUpperCase()}`
 }
 
+// FANZA awsimgsrc 的 ps.jpg 是 ~125×178 缩略图，pl.jpg 是 ~800×538 大图
+// 老数据里 cover_url 普遍是 ps，前端展示前升级为 pl 即可立即清晰
+const FANZA_COVER_UPGRADE_RE = /(awsimgsrc\.dmm\.co\.jp\/[^?#]*?)ps(\.(?:jpg|jpeg|png|webp))(?=$|[?#])/i
+
+export function upgradeFanzaCoverUrl(url) {
+  if (typeof url !== 'string' || !url) return url
+  return url.replace(FANZA_COVER_UPGRADE_RE, '$1pl$2')
+}
+
 // ============================
 // 多人合集过滤规则
 // ============================
@@ -226,6 +235,7 @@ export function entriesFromPayload(data) {
         ...item,
         code,
         display_code: item.display_code || formatProductCode(code),
+        cover_url: upgradeFanzaCoverUrl(item.cover_url),
         month: normalizeMonth(item.month)
       }
     })
@@ -239,14 +249,16 @@ export function entriesFromJinjierActresses(data) {
     .filter(item => item.period === 'month')
     .map(item => {
       const month = normalizeMonth(item.month)
-      const cover = item.local_cover || item.fanza_image_url || item.cover_url || ''
+      const localCover = item.local_cover || ''
+      // 本地下载的封面保留原文件路径；网络回退源做 ps→pl 升级
+      const cover = localCover || upgradeFanzaCoverUrl(item.fanza_image_url || item.cover_url || '')
       return {
         name: `${item.note} #${item.rank}`,
         url: '',
         code: `${month}-${item.rank}`,
         display_code: item.note,
         cover,
-        cover_url: item.fanza_image_url || item.cover_url || '',
+        cover_url: upgradeFanzaCoverUrl(item.fanza_image_url || item.cover_url || ''),
         description: item.name || '',
         rank: item.rank,
         month,
@@ -276,7 +288,7 @@ export function entriesFromJinjierMovies(data) {
         display_code: formatProductCode(code) || code,
         cid: item.cid || '',
         url: item.url || '',
-        cover_url: item.cover_url || '',
+        cover_url: upgradeFanzaCoverUrl(item.cover_url || ''),
         rank: Number(item.rank) || 9999,
         month
       }

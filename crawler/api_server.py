@@ -86,8 +86,11 @@ def ensure_ranking_months(months, force=False):
             continue
 
         try:
+            cmd = [sys.executable, "crawl_fanza.py", "--month", month]
+            if force:
+                cmd.append("--force-covers")
             result = subprocess.run(
-                [sys.executable, "crawl_fanza.py", "--month", month],
+                cmd,
                 cwd=str(CRAWLER_DIR),
                 capture_output=True,
                 text=True,

@@ -18,6 +18,31 @@ import {
   yearRange
 } from './ranking.js'
 
+// 持久化用户的视图选项，刷新后保留状态；版本号用于未来字段不兼容时主动作废
+const STORAGE_KEY = 'fanza-ranking:ui-state:v1'
+const ALLOWED_RANKING_MODE = ['score', 'sales']
+const ALLOWED_DATA_SOURCE = ['jinjier', 'fanza']
+const ALLOWED_PERIOD = ['decade', 'year', 'month']
+const ALLOWED_SORT_KEY = ['rank', 'score', 'appearances']
+
+function loadSavedState() {
+  if (typeof window === 'undefined') return {}
+  try {
+    const raw = window.localStorage.getItem(STORAGE_KEY)
+    if (!raw) return {}
+    const parsed = JSON.parse(raw)
+    return parsed && typeof parsed === 'object' ? parsed : {}
+  } catch {
+    return {}
+  }
+}
+
+function pickFromList(value, allowed, fallback) {
+  return allowed.includes(value) ? value : fallback
+}
+
+const saved = loadSavedState()
+
 const allEntries = ref([])
 const jinjierMovieEntries = ref([])      // 仅 jinjier 模式启用：影片榜规范化条目，用于女优 → 作品反查
 const meta = ref({ months: [] })
@@ -26,17 +51,93 @@ const error = ref('')
 const syncing = ref(false)
 const syncMessage = ref('')
 
-const sortKey = ref('rank')          // rank | score | appearances
-const keyword = ref('')
-const dataSource = ref('fanza')      // jinjier | fanza
-const period = ref('decade')
-const selectedYear = ref('')
-const selectedMonth = ref(latestCompleteMonth())
+const sortKey = ref(pickFromList(saved.sortKey, ALLOWED_SORT_KEY, 'rank'))
+const keyword = ref('')                 // 搜索词不持久化，刷新后清空
+const dataSource = ref(pickFromList(saved.dataSource, ALLOWED_DATA_SOURCE, 'fanza'))
+const rankingMode = ref(pickFromList(saved.rankingMode, ALLOWED_RANKING_MODE, 'score'))
+const period = ref(pickFromList(saved.period, ALLOWED_PERIOD, 'decade'))
+const selectedYear = ref(typeof saved.selectedYear === 'string' ? saved.selectedYear : '')
+const selectedMonth = ref(
+  typeof saved.selectedMonth === 'string' && saved.selectedMonth
+    ? saved.selectedMonth
+    : latestCompleteMonth()
+)
 const routeHash = ref(window.location.hash)
 let ready = false
 let loadVersion = 0
 let ensureVersion = 0
 let ensureTimer = 0
+
+// 强制重抓：Ctrl+Shift+K 唤起密码弹窗
+const RECRAWL_PASSPHRASE = 'fanza2026'
+const RECRAWL_COMBO = { ctrl: true, shift: true, key: 'k' }
+const showReCrawlModal = ref(false)
+const reCrawlInput = ref('')
+const reCrawlError = ref('')
+const reCrawlBusy = ref(false)
+const reCrawlResult = ref('')
+
+function handleKeydown(e) {
+  if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === RECRAWL_COMBO.key) {
+    e.preventDefault()
+    if (showReCrawlModal.value) return
+    reCrawlInput.value = ''
+    reCrawlError.value = ''
+    reCrawlResult.value = ''
+    showReCrawlModal.value = true
+  }
+}
+
+function closeReCrawl() {
+  showReCrawlModal.value = false
+}
+
+async function submitReCrawl() {
+  if (reCrawlInput.value !== RECRAWL_PASSPHRASE) {
+    reCrawlError.value = '密码错误'
+    reCrawlInput.value = ''
+    return
+  }
+  reCrawlError.value = ''
+  reCrawlResult.value = ''
+  reCrawlBusy.value = true
+
+  // 只重抓当前视图范围内的月份
+  const months = [...selectedPeriodMonths.value]
+    .filter(m => m >= '2026-01')
+    .sort()
+
+  if (!months.length) {
+    reCrawlResult.value = '当前视图没有可重抓的月份。'
+    reCrawlBusy.value = false
+    return
+  }
+
+  reCrawlResult.value = `正在重抓 ${months.join('、')}，请等待…`
+
+  try {
+    const res = await fetch(
+      `/api/ensure-ranking?months=${encodeURIComponent(months.join(','))}&force=1`,
+      { cache: 'no-cache' }
+    )
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    const data = await res.json()
+    if (!data.ok) {
+      const failed = data.failed?.map(item => `${item.month}: ${item.error}`).join('；') || '未知错误'
+      throw new Error(failed)
+    }
+    reCrawlResult.value = data.crawled?.length
+      ? `已完成：${data.crawled.join('、')}。${data.skipped?.length ? '跳过：' + data.skipped.join('、') : ''}`
+      : '重抓完成。'
+
+    // 有变更则刷新前端数据（封面路径已更新）
+    if (data.ranking) setPayload(data.ranking)
+  } catch (e) {
+    reCrawlResult.value = `重抓失败：${e.message}`
+  } finally {
+    reCrawlBusy.value = false
+  }
+}
 
 function updateRouteHash() {
   routeHash.value = window.location.hash
@@ -109,6 +210,40 @@ const filtered = computed(() => {
   return arr
 })
 
+// 销售榜模式：保留原始 entries，按月份分组并按 rank 升序排列
+const salesGroups = computed(() => {
+  if (rankingMode.value !== 'sales') return []
+  const entries = filterEntriesByRange(allEntries.value, activeRange.value)
+  const kw = keyword.value.trim().toLowerCase()
+  const filteredEntries = kw
+    ? entries.filter(x =>
+        (x.name || '').toLowerCase().includes(kw) ||
+        (x.description || '').toLowerCase().includes(kw)
+      )
+    : entries
+
+  const byMonth = new Map()
+  for (const item of filteredEntries) {
+    if (!item.month) continue
+    if (!byMonth.has(item.month)) byMonth.set(item.month, [])
+    byMonth.get(item.month).push(item)
+  }
+  return [...byMonth.entries()]
+    .map(([month, items]) => ({
+      month,
+      items: items.slice().sort((a, b) => (Number(a.rank) || 9999) - (Number(b.rank) || 9999))
+    }))
+    .sort((a, b) => b.month.localeCompare(a.month))
+})
+
+const salesTotal = computed(() =>
+  salesGroups.value.reduce((sum, group) => sum + group.items.length, 0)
+)
+
+const totalCount = computed(() =>
+  rankingMode.value === 'sales' ? salesTotal.value : filtered.value.length
+)
+
 const detailKey = computed(() => {
   const prefix = '#/detail/'
   if (!routeHash.value.startsWith(prefix)) return ''
@@ -116,6 +251,8 @@ const detailKey = computed(() => {
 })
 
 const detailItem = computed(() => {
+  // 销售榜模式直跳外链，不进入聚合详情页
+  if (rankingMode.value === 'sales') return null
   if (!detailKey.value) return null
   return rankedItems.value.find(item => (item.detail_key || item.url || item.name) === detailKey.value) || null
 })
@@ -134,6 +271,9 @@ const selectedPeriodMonths = computed(() => {
 })
 
 const activeMonths = computed(() => {
+  if (rankingMode.value === 'sales') {
+    return salesGroups.value.map(group => group.month)
+  }
   const months = rankedItems.value
     .flatMap(item => item.months)
     .filter((month, index, arr) => arr.indexOf(month) === index)
@@ -307,6 +447,7 @@ function scheduleEnsureActiveData() {
 
 onMounted(async () => {
   window.addEventListener('hashchange', updateRouteHash)
+  window.addEventListener('keydown', handleKeydown)
   try {
     await loadRanking()
     syncSelectionDefaults()
@@ -321,6 +462,7 @@ onMounted(async () => {
 
 onUnmounted(() => {
   window.removeEventListener('hashchange', updateRouteHash)
+  window.removeEventListener('keydown', handleKeydown)
   if (ensureTimer) window.clearTimeout(ensureTimer)
 })
 
@@ -346,6 +488,26 @@ watch(dataSource, async () => {
     loading.value = false
   }
 })
+
+// 视图选项变更时持久化到 localStorage，刷新后恢复
+watch(
+  [rankingMode, dataSource, period, selectedYear, selectedMonth, sortKey],
+  () => {
+    if (typeof window === 'undefined') return
+    try {
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify({
+        rankingMode: rankingMode.value,
+        dataSource: dataSource.value,
+        period: period.value,
+        selectedYear: selectedYear.value,
+        selectedMonth: selectedMonth.value,
+        sortKey: sortKey.value
+      }))
+    } catch {
+      // localStorage 写入失败（如配额超限/隐私模式）不阻塞主流程
+    }
+  }
+)
 </script>
 
 <template>
@@ -410,21 +572,39 @@ watch(dataSource, async () => {
 
     <template v-else>
       <header class="header">
-      <h1>{{ activeRange.label }}</h1>
-      <div v-if="meta.generated_at" class="meta">
-        <span>数据源 {{ dataSource === 'jinjier' ? 'Jinjier 历史数据' : 'FANZA 官方抓取' }}</span>
-        <span class="meta-sep">·</span>
-        <span>共 {{ filtered.length }} 条</span>
-        <details class="meta-details">
-          <summary>更多详情</summary>
-          <div class="meta-details-body">
-            <span>更新于 {{ meta.generated_at }}</span>
-            <span class="meta-sep">·</span>
-            <span>统计区间 {{ activeRange.start }} 至 {{ activeRange.end }}</span>
-            <span class="meta-sep">·</span>
-            <span>纳入月份 {{ activeMonths.join('、') || '—' }}</span>
-          </div>
-        </details>
+      <div class="header-main">
+        <h1>{{ activeRange.label }}</h1>
+        <div v-if="meta.generated_at" class="meta">
+          <span>数据源 {{ dataSource === 'jinjier' ? 'Jinjier 历史数据' : 'FANZA 官方抓取' }}</span>
+          <span class="meta-sep">·</span>
+          <span>共 {{ totalCount }} 条</span>
+          <details class="meta-details">
+            <summary>更多详情</summary>
+            <div class="meta-details-body">
+              <span>更新于 {{ meta.generated_at }}</span>
+              <span class="meta-sep">·</span>
+              <span>统计区间 {{ activeRange.start }} 至 {{ activeRange.end }}</span>
+              <span class="meta-sep">·</span>
+              <span>纳入月份 {{ activeMonths.join('、') || '—' }}</span>
+            </div>
+          </details>
+        </div>
+      </div>
+      <div class="ranking-mode-switch" role="tablist" aria-label="榜单模式">
+        <button
+          type="button"
+          role="tab"
+          :aria-selected="rankingMode === 'score'"
+          :class="{ active: rankingMode === 'score' }"
+          @click="rankingMode = 'score'"
+        >赋分排名</button>
+        <button
+          type="button"
+          role="tab"
+          :aria-selected="rankingMode === 'sales'"
+          :class="{ active: rankingMode === 'sales' }"
+          @click="rankingMode = 'sales'"
+        >销售榜</button>
       </div>
       </header>
 
@@ -470,7 +650,7 @@ watch(dataSource, async () => {
         placeholder="按名称搜索…"
         class="search"
       />
-      <select v-model="sortKey" class="select">
+      <select v-model="sortKey" class="select" :disabled="rankingMode === 'sales'">
         <option value="rank">综合排名</option>
         <option value="score">总分</option>
         <option value="appearances">上榜次数</option>
@@ -484,14 +664,167 @@ watch(dataSource, async () => {
         <p v-if="unavailableInRange.length" class="notice">
           FANZA 月度排行接口仅保留近期约 5 个月数据，以下月份官方未提供，已自动跳过：{{ unavailableInRange.join('、') }}
         </p>
-        <RankingList :items="filtered" :count-label="countLabel" :count-unit="countUnit" />
+        <RankingList
+          v-if="rankingMode === 'score'"
+          :items="filtered"
+          :count-label="countLabel"
+          :count-unit="countUnit"
+        />
+        <template v-else>
+          <section
+            v-for="group in salesGroups"
+            :key="group.month"
+            class="month-section"
+          >
+            <h2 class="month-title">
+              {{ group.month }} 月
+              <span class="month-count">{{ group.items.length }} 部</span>
+            </h2>
+            <RankingList :items="group.items" mode="sales" />
+          </section>
+          <p v-if="!salesGroups.length" class="hint">暂无数据</p>
+        </template>
       </template>
     </template>
+
+    <!-- 强制重抓弹窗：Ctrl+Shift+K 唤起 -->
+    <div v-if="showReCrawlModal" class="modal-backdrop" @click.self="closeReCrawl">
+      <div class="modal" role="dialog" aria-label="强制重抓封面">
+        <h2 class="modal-title">强制重抓封面</h2>
+        <p class="modal-desc">输入密码后将以大图源重抓 {{ dataSource === 'fanza' ? 'FANZA' : 'Jinjier' }} 数据可用月份的全部封面。</p>
+        <form @submit.prevent="submitReCrawl" class="modal-form">
+          <input
+            v-model="reCrawlInput"
+            type="password"
+            class="modal-input"
+            placeholder="输入密码…"
+            :disabled="reCrawlBusy"
+            autofocus
+          />
+          <div class="modal-actions">
+            <button type="button" class="btn btn-secondary" @click="closeReCrawl" :disabled="reCrawlBusy">取消</button>
+            <button type="submit" class="btn btn-primary" :disabled="reCrawlBusy || !reCrawlInput">
+              {{ reCrawlBusy ? '进行中…' : '确认' }}
+            </button>
+          </div>
+        </form>
+        <p v-if="reCrawlError" class="modal-error">{{ reCrawlError }}</p>
+        <p v-if="reCrawlResult" class="modal-result">{{ reCrawlResult }}</p>
+      </div>
+    </div>
   </div>
 </template>
 
 <style scoped>
+.header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 4px;
+}
+.header-main { flex: 1; min-width: 0; }
 .header h1 { margin: 0 0 8px; font-size: 28px; }
+
+.ranking-mode-switch {
+  display: inline-flex;
+  background: #f2f2f5;
+  border-radius: 9px;
+  padding: 3px;
+  gap: 2px;
+  flex-shrink: 0;
+}
+.ranking-mode-switch button {
+  border: none;
+  background: transparent;
+  padding: 6px 14px;
+  border-radius: 6px;
+  font-size: 13px;
+  color: #1d1d1f;
+  cursor: pointer;
+  transition: background 0.15s ease, box-shadow 0.15s ease;
+}
+.ranking-mode-switch button:hover:not(.active) {
+  color: #0066cc;
+}
+.ranking-mode-switch button.active {
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+  font-weight: 600;
+}
+
+.month-section + .month-section { margin-top: 28px; }
+.month-title {
+  font-size: 18px;
+  font-weight: 650;
+  margin: 0 0 12px;
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  color: #1d1d1f;
+}
+.month-count {
+  color: #6e6e73;
+  font-size: 13px;
+  font-weight: normal;
+}
+
+/* 强制重抓弹窗 */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+.modal {
+  background: #fff;
+  border-radius: 14px;
+  padding: 28px 32px;
+  max-width: 420px;
+  width: calc(100% - 32px);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.18);
+}
+.modal-title {
+  margin: 0 0 12px;
+  font-size: 20px;
+  font-weight: 650;
+}
+.modal-desc {
+  margin: 0 0 18px;
+  font-size: 14px;
+  color: #6e6e73;
+  line-height: 1.6;
+}
+.modal-form { display: flex; flex-direction: column; gap: 14px; }
+.modal-input {
+  padding: 10px 14px;
+  border-radius: 8px;
+  border: 1px solid #d2d2d7;
+  font-size: 15px;
+  width: 100%;
+  box-sizing: border-box;
+}
+.modal-input:focus { outline: none; border-color: #0066cc; box-shadow: 0 0 0 3px rgba(0, 102, 204, 0.15); }
+.modal-actions { display: flex; gap: 10px; justify-content: flex-end; }
+.btn {
+  padding: 8px 20px;
+  border-radius: 8px;
+  border: none;
+  font-size: 14px;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+.btn:disabled { opacity: 0.45; cursor: default; }
+.btn-secondary { background: #f2f2f5; color: #1d1d1f; }
+.btn-secondary:hover:not(:disabled) { background: #e5e5ea; }
+.btn-primary { background: #0066cc; color: #fff; }
+.btn-primary:hover:not(:disabled) { background: #0055aa; }
+.modal-error { margin: 12px 0 0; color: #d70015; font-size: 13px; }
+.modal-result { margin: 12px 0 0; font-size: 13px; color: #1d1d1f; line-height: 1.5; }
 .meta {
   color: #6e6e73;
   margin: 0 0 24px;

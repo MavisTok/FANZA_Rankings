@@ -41,8 +41,10 @@ MAX_RANK = 100
 
 ROOT = Path(__file__).resolve().parent.parent
 COVER_DIR = DATA_DIR / "covers"
+FANZA_COVER_DIR = COVER_DIR / "fanza"
 RAW_DIR.mkdir(parents=True, exist_ok=True)
 COVER_DIR.mkdir(parents=True, exist_ok=True)
+FANZA_COVER_DIR.mkdir(parents=True, exist_ok=True)
 
 CONTENT_RANKING_QUERY = """
 query ContentRankingPage(
@@ -158,29 +160,45 @@ def post_graphql(query: str, variables: Dict) -> Dict:
     return data
 
 
-def cover_filename(url: str, content_id: str, rank: int) -> str:
+def cover_filename(url: str, content_id: str) -> str:
+    """
+    用 content_id 作为文件名（稳定 ID），避免 rank 变化导致同图多副本。
+    跨月同作品会在各自月份目录下各保留一份。
+    """
     parsed = urlparse(url)
     suffix = Path(parsed.path).suffix.lower()
     if suffix not in {".jpg", ".jpeg", ".png", ".webp", ".gif"}:
         suffix = ".jpg"
     safe_id = re.sub(r"[^a-zA-Z0-9_-]+", "-", content_id).strip("-") or "cover"
-    return f"{rank:03d}-{safe_id}{suffix}"
+    return f"{safe_id}{suffix}"
 
 
-def download_cover(url: str, content_id: str, rank: int) -> str:
+def download_cover(url: str, content_id: str, month: str, force: bool = False) -> str:
+    """
+    按月归档：data/covers/fanza/{YYYY-MM}/{content_id}.{ext}
+    返回前端可访问的 web 路径。
+    force=True 时无视已有文件，强制重新下载。
+    """
     if not url:
         return ""
-    filename = cover_filename(url, content_id, rank)
-    out_path = COVER_DIR / filename
+    filename = cover_filename(url, content_id)
+    out_dir = FANZA_COVER_DIR / month
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / filename
+    web_path = f"/data/covers/fanza/{month}/{filename}"
     if out_path.exists():
-        return f"/data/covers/{filename}"
+        if not force and out_path.stat().st_size >= 30_000:
+            return web_path
+        reason = "强制覆盖" if force else f"旧缩略图（{out_path.stat().st_size} bytes）"
+        log.info("覆盖 %s %s → 重新下载", out_path.name, reason)
+        out_path.unlink()
     req = Request(url, headers=HEADERS)
     try:
         with urlopen(req, timeout=TIMEOUT) as resp:
             out_path.write_bytes(resp.read())
-        return f"/data/covers/{filename}"
+        return web_path
     except (HTTPError, URLError) as e:
-        log.warning("封面下载失败 rank=%s id=%s url=%s: %s", rank, content_id, url, e)
+        log.warning("封面下载失败 month=%s id=%s url=%s: %s", month, content_id, url, e)
         return ""
 
 
@@ -195,12 +213,13 @@ def product_code_from_url(url: str) -> str:
     ).strip()
 
 
-def item_from_graphql(node: Dict, skip_covers: bool) -> Dict:
+def item_from_graphql(node: Dict, month: str, skip_covers: bool, force_covers: bool = False) -> Dict:
     content = node.get("content") or {}
     image = content.get("packageImage") or {}
     content_id = node.get("id") or ""
     rank = node.get("rank") or 0
-    cover_url = image.get("mediumUrl") or image.get("largeUrl") or ""
+    # 优先取 largeUrl（pl.jpg ~800×538），其次 mediumUrl，避免列表用 smallUrl/ps.jpg 缩略图
+    cover_url = image.get("largeUrl") or image.get("mediumUrl") or image.get("smallUrl") or ""
     actresses = content.get("actresses") or []
     actress_names = [x.get("name", "") for x in actresses if x.get("name")]
     description = " / ".join(actress_names)
@@ -211,14 +230,14 @@ def item_from_graphql(node: Dict, skip_covers: bool) -> Dict:
         "name": content.get("title", ""),
         "url": url,
         "code": product_code_from_url(url) or content_id,
-        "cover": "" if skip_covers else download_cover(cover_url, content_id, rank),
+        "cover": "" if skip_covers else download_cover(cover_url, content_id, month, force=force_covers),
         "cover_url": cover_url,
         "description": description,
         "category": "videoa-monthly",
     }
 
 
-def crawl_month(month: str | None = None, skip_covers: bool = False) -> Dict:
+def crawl_month(month: str | None = None, skip_covers: bool = False, force_covers: bool = False) -> Dict:
     year, month_no, month_key = parse_month(month)
     log.info("开始抓取 %s FANZA 月度排行榜", month_key)
 
@@ -255,7 +274,7 @@ def crawl_month(month: str | None = None, skip_covers: bool = False) -> Dict:
     nodes = ranking.get("items", [])
     all_items: List[Dict] = []
     for node in nodes[:MAX_RANK]:
-        all_items.append(item_from_graphql(node, skip_covers=skip_covers))
+        all_items.append(item_from_graphql(node, month=month_key, skip_covers=skip_covers, force_covers=force_covers))
         polite_sleep()
 
     payload = {
@@ -274,9 +293,10 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="抓取 FANZA 月度排行榜")
     parser.add_argument("--month", help="指定月份，格式 YYYY-MM；默认上个月")
     parser.add_argument("--skip-covers", action="store_true", help="只抓数据，不下载封面")
+    parser.add_argument("--force-covers", action="store_true", help="强制重新下载所有封面")
     args = parser.parse_args()
     try:
-        crawl_month(month=args.month, skip_covers=args.skip_covers)
+        crawl_month(month=args.month, skip_covers=args.skip_covers, force_covers=args.force_covers)
     except Exception as e:
         _, _, month_key = parse_month(args.month)
         fallback = read_month_payload(month_key, repair=True)

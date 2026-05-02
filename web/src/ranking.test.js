@@ -17,6 +17,7 @@ import {
   monthRange,
   monthsForPeriod,
   tenYearRange,
+  upgradeFanzaCoverUrl,
   worksFromJinjierMovies,
   yearRange
 } from './ranking.js'
@@ -51,6 +52,40 @@ test('month range covers one selected month', () => {
     start: '2026-04',
     end: '2026-04'
   })
+})
+
+test('FANZA poster small URLs upgrade to large variant; non-matching URLs untouched', () => {
+  assert.equal(
+    upgradeFanzaCoverUrl('https://awsimgsrc.dmm.co.jp/pics_dig/digital/video/sone00846/sone00846ps.jpg'),
+    'https://awsimgsrc.dmm.co.jp/pics_dig/digital/video/sone00846/sone00846pl.jpg'
+  )
+  assert.equal(
+    upgradeFanzaCoverUrl('https://awsimgsrc.dmm.co.jp/pics_dig/digital/video/abc/abcps.jpg?token=1'),
+    'https://awsimgsrc.dmm.co.jp/pics_dig/digital/video/abc/abcpl.jpg?token=1'
+  )
+  // 非 awsimgsrc 域名 / 非 ps.jpg 不动
+  assert.equal(upgradeFanzaCoverUrl('https://example.test/foo/ps.jpg'), 'https://example.test/foo/ps.jpg')
+  assert.equal(upgradeFanzaCoverUrl('https://awsimgsrc.dmm.co.jp/foo/abcpl.jpg'), 'https://awsimgsrc.dmm.co.jp/foo/abcpl.jpg')
+  // 空值/非字符串保持原样
+  assert.equal(upgradeFanzaCoverUrl(''), '')
+  assert.equal(upgradeFanzaCoverUrl(null), null)
+})
+
+test('entriesFromPayload upgrades cover_url from ps.jpg to pl.jpg', () => {
+  const entries = entriesFromPayload({
+    monthly_entries: [
+      {
+        rank: 1, name: 'Solo work',
+        code: 'sone00846', month: '2026-01',
+        cover_url: 'https://awsimgsrc.dmm.co.jp/pics_dig/digital/video/sone00846/sone00846ps.jpg'
+      }
+    ]
+  })
+  assert.equal(entries.length, 1)
+  assert.equal(
+    entries[0].cover_url,
+    'https://awsimgsrc.dmm.co.jp/pics_dig/digital/video/sone00846/sone00846pl.jpg'
+  )
 })
 
 test('product codes are formatted for display', () => {

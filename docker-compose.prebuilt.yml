@@ -1,0 +1,20 @@
+version: "3.3"
+
+# 适用于低内存 VPS：跳过容器内 npm 构建阶段。
+# 使用前需先在本机执行：cd web && npm ci && npm run build
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile.prebuilt
+    container_name: fanza-rankings
+    ports:
+      - "5174:80"
+    volumes:
+      - fanza-data:/var/www/ranking-site/data
+    environment:
+      - TZ=Asia/Shanghai
+    restart: unless-stopped
+
+volumes:
+  fanza-data:

@@ -1,0 +1,14 @@
+[Unit]
+Description=FANZA Rankings monthly crawl
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=www-data
+Group=www-data
+WorkingDirectory=/var/www/ranking-site
+Environment=PYTHONUNBUFFERED=1
+Environment=TZ=Asia/Shanghai
+Environment=FANZA_DATA_DIR=/var/www/ranking-site/data
+ExecStart=/var/www/ranking-site/crawler/run.sh

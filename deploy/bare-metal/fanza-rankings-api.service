@@ -1,0 +1,19 @@
+[Unit]
+Description=FANZA Rankings API server
+After=network.target
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+WorkingDirectory=/var/www/ranking-site
+Environment=PYTHONUNBUFFERED=1
+Environment=API_PORT=8080
+Environment=TZ=Asia/Shanghai
+Environment=FANZA_DATA_DIR=/var/www/ranking-site/data
+ExecStart=/var/www/ranking-site/.venv/bin/python /var/www/ranking-site/crawler/api_server.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -134,6 +134,7 @@ python crawler/aggregator.py
 - 支持 `workflow_dispatch` 手动触发。
 - 自动计算“上个月（YYYY-MM）”，执行 `sync_seed_data.py`，并对该月份抓取失败时最多重试 3 次，成功即停止重试并聚合。
 - 若 `data/` 发生变化，则自动 `commit` 并 `push` 到当前分支。
+- 工作流使用 `actions/checkout@v6` 与 `actions/setup-python@v6`，并显式启用 `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24=true`，兼容 Node.js 24 运行时迁移。
 
 ### 2) 打开仓库 Actions 权限
 

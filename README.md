@@ -119,3 +119,51 @@ python crawler/aggregator.py
 ## 数据资源致谢
 
 感谢 [jinjier.art/sql](https://jinjier.art/sql) 提供的数据资源支持，本项目引用了其公开数据资源用于榜单数据补全与校验。
+
+## 使用 GitHub Actions 自动采集并写回仓库
+
+如果你希望不用常驻服务器，也可以直接让 GitHub Actions 每月自动执行爬虫，并把最新 `data/` 提交回仓库。
+
+### 1) 新增工作流文件
+
+仓库已提供示例工作流：`.github/workflows/update-fanza-ranking.yml`。
+
+主要行为：
+
+- 每月末（UTC 的 28~31 日 19:00）触发，并在脚本中校验 **Asia/Shanghai 每月 1 日** 才真正执行。
+- 支持 `workflow_dispatch` 手动触发。
+- 自动计算“上个月（YYYY-MM）”，执行 `sync_seed_data.py`，并对该月份抓取失败时最多重试 3 次，成功即停止重试并聚合。
+- 若 `data/` 发生变化，则自动 `commit` 并 `push` 到当前分支。
+- 工作流使用 `actions/checkout@v6` 与 `actions/setup-python@v6`，并显式启用 `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24=true`，兼容 Node.js 24 运行时迁移。
+
+### 2) 打开仓库 Actions 权限
+
+在 GitHub 仓库页面检查：
+
+- `Settings -> Actions -> General`：允许工作流运行。
+- `Settings -> Actions -> General -> Workflow permissions`：选择 **Read and write permissions**（需要写回仓库）。
+
+### 3) 可选：限制触发分支
+
+如果只希望在 `main` 运行，可在工作流的 `on` 或 job 条件中增加分支限制；当前示例默认在工作流所在分支可执行。
+
+### 4) 手动测试
+
+在 `Actions` 页面找到 `Update FANZA Rankings`，点击 `Run workflow`。
+
+首次测试建议关注：
+
+- 依赖安装是否成功（`crawler/requirements.txt`）。
+- FANZA 抓取是否返回有效数据。
+- 日志中是否出现 `No data changes`（说明本次无新增或无差异）。
+
+### 5) 常见问题
+
+- **为什么不是“每月 1 日 03:00”直接写在 cron？**  
+  GitHub Actions cron 使用 UTC，且不支持时区参数。示例采用“UTC 月末窗口触发 + 上海时区 gate”的方式，确保只在上海时区每月 1 日执行一次。
+
+- **为什么没有提交变更？**  
+  只有仓库文件产生 diff 才会提交；若抓取结果与现有数据一致，会输出 `No data changes`。
+
+- **会不会并发重复写入？**  
+  示例配置了 `concurrency`，避免同一时间重复执行同一工作流。

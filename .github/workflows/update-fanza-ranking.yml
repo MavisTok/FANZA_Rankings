@@ -1,0 +1,99 @@
+name: Update FANZA Rankings
+
+on:
+  schedule:
+    # GitHub cron is UTC. We run near month-end UTC and gate to Shanghai day 1 in-script.
+    - cron: '0 19 28-31 * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: update-fanza-rankings
+  cancel-in-progress: false
+
+jobs:
+  crawl-and-commit:
+    runs-on: ubuntu-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Check schedule window (Asia/Shanghai day 1)
+        id: gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            target_month=$(TZ=Asia/Shanghai date -d 'last month' +%Y-%m)
+            echo "target_month=${target_month}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          sh_day=$(TZ=Asia/Shanghai date +%d)
+          if [ "$sh_day" = "01" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            target_month=$(TZ=Asia/Shanghai date -d 'last month' +%Y-%m)
+            echo "target_month=${target_month}" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Setup Python
+        if: steps.gate.outputs.run == 'true'
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        if: steps.gate.outputs.run == 'true'
+        run: pip install -r crawler/requirements.txt
+
+      - name: Crawl previous month (retry up to 3 times)
+        if: steps.gate.outputs.run == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          target_month='${{ steps.gate.outputs.target_month }}'
+          echo "Target month: ${target_month}"
+
+          python crawler/sync_seed_data.py
+
+          for i in 1 2 3; do
+            echo "Attempt ${i}/3: crawl_fanza --month ${target_month}"
+            if python crawler/crawl_fanza.py --month "${target_month}"; then
+              echo "Crawl succeeded on attempt ${i}"
+              python crawler/aggregator.py
+              exit 0
+            fi
+            echo "Crawl failed on attempt ${i}"
+            if [ "$i" -lt 3 ]; then
+              sleep 30
+            fi
+          done
+
+          echo "Crawl failed after 3 attempts"
+          exit 1
+
+      - name: Commit & push if changed
+        if: steps.gate.outputs.run == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git diff --quiet; then
+            echo "No data changes"
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add data/ crawler/
+          git commit -m "chore(data): update FANZA rankings (${{ steps.gate.outputs.target_month }})"
+          git push
